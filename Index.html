@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<title>Hand Figure</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<style>
+  *{-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:#050807;overflow:hidden;overscroll-behavior:none;touch-action:none;font-family:ui-monospace,Menlo,Consolas,monospace;color:#bfe;}
+  #stage{position:fixed;inset:0;transform:scaleX(-1);}
+  #stage video,#stage canvas{position:absolute;inset:0;width:100%;height:100%;}
+  #cam{object-fit:cover;filter:grayscale(.7) brightness(.6) contrast(1.15) saturate(.6);}
+  #hud{position:fixed;left:12px;top:calc(env(safe-area-inset-top,0px) + 10px);font-size:11px;line-height:1.6;opacity:.85;white-space:pre;text-shadow:0 0 6px #000;}
+  #legend{position:fixed;right:12px;top:calc(env(safe-area-inset-top,0px) + 52px);font-size:11px;line-height:1.7;text-align:right;background:rgba(5,12,10,.78);border:1px solid #3dffc033;border-radius:12px;padding:10px 12px;display:none;z-index:3;}
+  #legend.show{display:block;}
+  .fab{position:fixed;z-index:4;width:44px;height:44px;border-radius:50%;border:1px solid #3dffc0;background:rgba(5,12,10,.65);color:#9fffe0;font:inherit;font-size:20px;padding:0;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);}
+  .fab:active{background:#3dffc033;}
+  #help{top:calc(env(safe-area-inset-top,0px) + 6px);right:12px;}
+  #zin{right:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 70px);}
+  #zout{right:12px;bottom:calc(env(safe-area-inset-bottom,0px) + 16px);}
+  #start{position:fixed;inset:0;display:flex;flex-direction:column;gap:16px;align-items:center;justify-content:center;background:rgba(3,8,7,.92);z-index:6;text-align:center;padding:24px;}
+  #start h1{margin:0;font-size:clamp(26px,8vw,48px);font-weight:600;letter-spacing:.08em;color:#9fffe0;text-shadow:0 0 24px #1affb0;}
+  #start p{margin:0;max-width:420px;opacity:.78;line-height:1.7;font-size:14px;}
+  #go{font:inherit;font-size:15px;padding:14px 32px;border-radius:999px;border:1px solid #3dffc0;background:transparent;color:#9fffe0;letter-spacing:.08em;}
+  #err{color:#ff8a8a;min-height:1.2em;font-size:13px;max-width:380px;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline webkit-playsinline muted autoplay></video>
+  <canvas id="gl"></canvas>
+  <canvas id="hand"></canvas>
+</div>
+<div id="hud"></div>
+<button class="fab" id="help">?</button>
+<div id="legend">0 · silindr (musht)<br>1 · chiziq<br>2 · uchburchak<br>3 · kvadrat<br>4 · piramida<br>5 · kub<br>6 · oktaedr<br>7 · prizma<br>8 · ikosaedr<br>9 · shar<br>10 · dodekaedr<br><br>🙌 ikki qo'l: uzoqlashtirsangiz kattalashadi,<br>yaqinlashtirsangiz kichrayadi</div>
+<button class="fab" id="zin">+</button>
+<button class="fab" id="zout">−</button>
+<div id="start">
+  <h1>HAND FIGURE</h1>
+  <p>Telefonni oldingizga qo'ying va qo'lingizni kameraga ko'rsating. Ochiq barmoqlar soniga qarab 3D shakl paydo bo'ladi. Ikkala qo'lni uzoqlashtirsangiz shakl kattalashadi, yaqinlashtirsangiz kichrayadi.</p>
+  <button id="go">KAMERANI YOQISH</button>
+  <div id="err"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<script>
+const $ = id => document.getElementById(id);
+const video = $('cam'), glC = $('gl'), hC = $('hand'), hctx = hC.getContext('2d'), hud = $('hud');
+const MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || matchMedia('(pointer:coarse)').matches;
+let W = innerWidth, H = innerHeight;
+
+/* ---------- three.js ---------- */
+const renderer = new THREE.WebGLRenderer({canvas: glC, alpha: true, antialias: !MOBILE});
+renderer.setPixelRatio(Math.min(devicePixelRatio, MOBILE ? 1.5 : 2));
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-W/2, W/2, H/2, -H/2, -2000, 2000);
+function resize(){
+  W = innerWidth; H = innerHeight;
+  renderer.setSize(W, H, false);
+  hC.width = W; hC.height = H;
+  camera.left = -W/2; camera.right = W/2; camera.top = H/2; camera.bottom = -H/2;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); addEventListener('orientationchange', () => setTimeout(resize, 250)); resize();
+
+const SHAPES = [
+  {name:'silindr',      color:0xffffff, geo:()=>new THREE.CylinderGeometry(.8,.8,1.7,16)},
+  {name:'chiziq',       color:0x4dfff0, line:true},
+  {name:'uchburchak',   color:0x3dff9a, geo:()=>new THREE.CircleGeometry(1.2,3)},
+  {name:'kvadrat',      color:0x3dff7a, geo:()=>new THREE.PlaneGeometry(1.7,1.7)},
+  {name:'piramida',     color:0xffe23d, geo:()=>new THREE.ConeGeometry(1.2,1.8,4)},
+  {name:'kub',          color:0xffa93d, geo:()=>new THREE.BoxGeometry(1.5,1.5,1.5), inner:true},
+  {name:'oktaedr',      color:0xff7ad9, geo:()=>new THREE.OctahedronGeometry(1.3)},
+  {name:'olti yoqli prizma', color:0xff7ad9, geo:()=>new THREE.CylinderGeometry(1,1,1.7,6)},
+  {name:'ikosaedr',     color:0xff7ad9, geo:()=>new THREE.IcosahedronGeometry(1.3)},
+  {name:'shar',         color:0xff7ad9, geo:()=>new THREE.SphereGeometry(1.2,12,9), wire:true},
+  {name:'dodekaedr',    color:0xff6ad5, geo:()=>new THREE.DodecahedronGeometry(1.3)}
+];
+function makeLines(geo, color, opacity, wire){
+  const g = wire ? new THREE.WireframeGeometry(geo) : new THREE.EdgesGeometry(geo, 1);
+  const m = new THREE.LineBasicMaterial({color, transparent:true, opacity, blending:THREE.AdditiveBlending, depthTest:false});
+  m.userData.o = opacity;
+  return new THREE.LineSegments(g, m);
+}
+const group = new THREE.Group(); scene.add(group);
+let current = -1, parts = [];
+function buildShape(i){
+  parts.forEach(p => { group.remove(p); p.geometry.dispose(); });
+  parts = []; current = i;
+  const s = SHAPES[i], c = s.color;
+  if (s.line){
+    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,-1.4,0), new THREE.Vector3(0,1.4,0)]);
+    const m = new THREE.LineBasicMaterial({color:c, transparent:true, blending:THREE.AdditiveBlending, depthTest:false}); m.userData.o = 1;
+    parts.push(new THREE.LineSegments(g, m));
+  } else {
+    parts.push(makeLines(s.geo(), c, 1, s.wire));
+    const glow = makeLines(s.geo(), c, .3, s.wire); glow.scale.setScalar(1.05); parts.push(glow);
+    if (s.inner) parts.push(makeLines(new THREE.BoxGeometry(.7,.7,.7), c, .9));
+  }
+  parts.forEach(p => group.add(p));
+}
+const ring = new THREE.Mesh(new THREE.RingGeometry(1.98,2,64),
+  new THREE.MeshBasicMaterial({color:0x9fffe0, transparent:true, opacity:.25, depthTest:false}));
+scene.add(ring);
+const N = MOBILE ? 40 : 70, pPos = new Float32Array(N*3), pSeed = [];
+for (let i=0;i<N;i++) pSeed.push({a:Math.random()*6.28, r:1.2+Math.random()*1.2, s:.3+Math.random()*.9, y:(Math.random()-.5)*2});
+const pGeo = new THREE.BufferGeometry(); pGeo.setAttribute('position', new THREE.BufferAttribute(pPos,3));
+const pts = new THREE.Points(pGeo, new THREE.PointsMaterial({color:0xbfffee, size:MOBILE?3:2.5, transparent:true, opacity:.8, depthTest:false}));
+scene.add(pts);
+
+/* ---------- qo'l kuzatuvi ---------- */
+const CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+let hands = [], rawHands = [];
+const d = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+function mapPt(l){
+  const vw = video.videoWidth || 720, vh = video.videoHeight || 1280;
+  const sc = Math.max(W/vw, H/vh);
+  return {x: l.x*vw*sc + (W-vw*sc)/2, y: l.y*vh*sc + (H-vh*sc)/2};
+}
+function countFingers(lm){
+  let n = 0;
+  [[8,6],[12,10],[16,14],[20,18]].forEach(([t,p]) => { if (d(lm[t],lm[0]) > d(lm[p],lm[0])*1.12) n++; });
+  if (d(lm[4],lm[17]) > d(lm[3],lm[17])*1.08 && d(lm[4],lm[5]) > d(lm[3],lm[5])) n++;
+  return n;
+}
+const model = new Hands({locateFile: f => 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/' + f});
+model.setOptions({maxNumHands:2, modelComplexity: MOBILE ? 0 : 1, minDetectionConfidence:.55, minTrackingConfidence:.5});
+model.onResults(r => { rawHands = r.multiHandLandmarks || []; hands = rawHands.map(lm => lm.map(mapPt)); });
+
+/* ---------- holat + zoom ---------- */
+const lerp = (a,b,t) => a + (b-a)*t;
+const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
+const cur = {x:W/2, y:H/3, size:80, roll:0, vis:0}, tgt = {x:W/2, y:H/3, roll:0, vis:0};
+let fingers = 0;
+let scale = 1;                 // zoom ko'paytirgichi (bir qo'lga o'tganda ham saqlanadi)
+let zbase = null;              // ikki qo'l boshlang'ich: {dist, scale}
+const baseSize = () => Math.min(W,H) * .15;
+const setScale = v => scale = clamp(v, .35, 3.2);
+$('zin').onclick  = () => setScale(scale*1.2);
+$('zout').onclick = () => setScale(scale/1.2);
+$('help').onclick = () => $('legend').classList.toggle('show');
+
+function update(){
+  if (rawHands.length){
+    fingers = rawHands.reduce((s,lm) => s + countFingers(lm), 0);
+    const pc = hands.map(h => ({x:(h[0].x+h[9].x)/2, y:(h[0].y+h[9].y)/2}));
+    if (pc.length === 2){
+      const dist = Math.hypot(pc[0].x-pc[1].x, pc[0].y-pc[1].y);
+      if (!zbase) zbase = {dist: Math.max(dist,30), scale};
+      setScale(lerp(scale, zbase.scale * dist / zbase.dist, .3));    // ikki qo'l = zoom
+      tgt.x = (pc[0].x+pc[1].x)/2;
+      tgt.y = Math.min(pc[0].y,pc[1].y) - baseSize()*scale*1.3;
+    } else {
+      zbase = null;
+      tgt.x = pc[0].x;
+      tgt.y = pc[0].y - baseSize()*scale*2.2;
+    }
+    const sz = baseSize()*scale;
+    tgt.x = clamp(tgt.x, sz, W - sz);
+    tgt.y = clamp(tgt.y, sz*1.1, H - sz);
+    const h0 = hands[0];
+    tgt.roll = Math.atan2(h0[9].x-h0[0].x, -(h0[9].y-h0[0].y));
+    tgt.vis = 1;
+  } else { tgt.vis = 0; zbase = null; }
+  cur.x = lerp(cur.x, tgt.x, .25); cur.y = lerp(cur.y, tgt.y, .25);
+  cur.roll = lerp(cur.roll, tgt.roll, .25); cur.vis = lerp(cur.vis, tgt.vis, .12);
+  cur.size = lerp(cur.size, baseSize()*scale, .3);
+  const idx = Math.min(fingers, SHAPES.length-1);
+  if (idx !== current && (rawHands.length || current === -1)) buildShape(idx);
+}
+function drawHands(){
+  hctx.clearRect(0,0,W,H);
+  hands.forEach(h => {
+    hctx.strokeStyle = 'rgba(255,255,255,.85)'; hctx.lineWidth = 1.5;
+    hctx.beginPath(); CONN.forEach(([a,b]) => { hctx.moveTo(h[a].x,h[a].y); hctx.lineTo(h[b].x,h[b].y); }); hctx.stroke();
+    hctx.fillStyle = '#fff'; h.forEach(p => { hctx.beginPath(); hctx.arc(p.x,p.y,2.4,0,6.28); hctx.fill(); });
+  });
+}
+const t0 = performance.now();
+function frame(now){
+  requestAnimationFrame(frame);
+  const t = (now - t0) / 1000;
+  update(); drawHands();
+  const s = cur.size, on = cur.vis > .02 && current >= 0;
+  group.visible = ring.visible = pts.visible = on;
+  if (on){
+    group.position.set(cur.x - W/2, H/2 - cur.y, 0);
+    group.scale.setScalar(s);
+    group.rotation.set(t*.5, t*.8, -cur.roll);
+    ring.position.copy(group.position); ring.scale.setScalar(s*1.15); ring.material.opacity = .25*cur.vis;
+    pts.position.copy(group.position);
+    for (let i=0;i<N;i++){
+      const q = pSeed[i], a = q.a + t*q.s;
+      pPos[i*3] = Math.cos(a)*q.r*s; pPos[i*3+1] = Math.sin(a*.8)*q.r*s*.8 + q.y*s*.3; pPos[i*3+2] = 0;
+    }
+    pGeo.attributes.position.needsUpdate = true;
+    parts.forEach(p => p.material.opacity = p.material.userData.o * cur.vis);
+  }
+  renderer.render(scene, camera);
+  hud.textContent = 'qo\'llar: ' + rawHands.length + '  barmoq: ' + fingers + '\nshakl: ' + (current>=0 ? SHAPES[current].name : '-') + '\nzoom: ' + scale.toFixed(2) + '×';
+}
+
+/* ---------- start ---------- */
+$('go').onclick = async () => {
+  $('err').textContent = '';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    $('err').textContent = 'Kamera faqat HTTPS (yoki localhost) orqali ishlaydi. Faylni HTTPS saytga joylang.'; return;
+  }
+  try {
+    video.srcObject = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user', width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    await video.play();
+    $('start').style.display = 'none';
+    buildShape(1);
+    requestAnimationFrame(frame);
+    let busy = false;
+    const loop = async () => {
+      if (!busy && video.readyState >= 2){ busy = true; try { await model.send({image: video}); } catch(e){} busy = false; }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  } catch(e){ $('err').textContent = 'Kameraga ruxsat berilmadi yoki kamera topilmadi: ' + e.message; }
+};
+</script>
+</body>
+</html>
